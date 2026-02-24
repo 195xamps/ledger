@@ -1,0 +1,272 @@
+# Evolving Facts — iOS App Build Prompt
+
+## Concept
+
+Build a Swift/SwiftUI iOS app called **"Ledger"** that reimagines news consumption. Instead of articles, the app tracks **evolving facts** — discrete, verifiable claims that update in real time as stories develop. No opinions, no fluff, just signal.
+
+---
+
+## Core Philosophy
+
+Traditional news apps serve articles — static snapshots written once. Ledger serves **living facts** — atomic units of truth that evolve over time. When a fact changes, the user sees exactly **what changed**, **why it matters**, and **where it came from**.
+
+---
+
+## Architecture
+
+### Data Model
+
+```
+Fact
+├── id: UUID
+├── headline: String              // e.g. "US inflation rate"
+├── currentValue: String          // e.g. "3.2% (Jan 2026)"
+├── category: Category            // .economy, .geopolitics, .tech, .science, .health, .climate
+├── importance: ImportanceLevel    // .breaking, .high, .medium, .low
+├── timeline: [FactRevision]      // ordered history of changes
+├── sources: [Source]             // attributed, linked
+├── relatedFacts: [UUID]          // connections to other evolving facts
+├── lastUpdated: Date
+├── confidence: ConfidenceLevel   // .confirmed, .developing, .disputed, .retracted
+└── tags: [String]
+
+FactRevision
+├── id: UUID
+├── timestamp: Date
+├── previousValue: String?
+├── newValue: String
+├── delta: String                 // human-readable "what changed"
+├── whyItMatters: String          // 1-2 sentence contextual significance
+├── source: Source
+└── revisionType: RevisionType    // .initial, .update, .correction, .escalation, .resolution
+
+Source
+├── name: String                  // e.g. "Reuters", "Federal Reserve"
+├── url: URL
+├── tier: SourceTier              // .primary (official/gov), .wire (AP/Reuters), .reporting (NYT/WSJ), .analysis
+└── retrievedAt: Date
+
+Category (enum)
+├── geopolitics
+├── economy
+├── technology
+├── science
+├── health
+├── climate
+├── legal
+└── security
+```
+
+### Backend / AI Layer
+
+Use the **Anthropic Claude API** as the intelligence layer:
+
+1. **Ingestion Pipeline**: Pull from RSS feeds, news APIs (NewsAPI, GDELT, MediaStack), and wire services. Feed raw articles into Claude with a structured extraction prompt.
+
+2. **Fact Extraction Prompt** (run per ingested article):
+```
+You are a fact extraction engine. Given the following news article, extract discrete, verifiable factual claims. For each fact:
+
+1. State the fact as a single, precise claim (no hedging, no opinion)
+2. Identify the primary source cited
+3. Rate confidence: confirmed | developing | disputed
+4. Determine if this updates an existing known fact (provide delta if so)
+5. Write a 1-sentence "why it matters" for general audience context
+
+Return as JSON array. Do NOT include editorial commentary, predictions, or opinions.
+Reject any claim that cannot be attributed to a named source.
+```
+
+3. **Deduplication & Merge**: Claude compares extracted facts against the existing fact database, merging updates into existing fact timelines rather than creating duplicates.
+
+4. **Change Detection Prompt**:
+```
+Given the existing fact record and this new information, determine:
+- Has anything materially changed? (yes/no)
+- If yes: what specifically changed, and what was the previous state?
+- Revision type: update | correction | escalation | resolution
+- Updated confidence level
+- 1-2 sentence "why this change matters"
+
+Only flag genuine changes. Rephrasings of the same information are NOT changes.
+```
+
+---
+
+## UI / UX Design (SwiftUI)
+
+### Screen 1: Ledger Feed (Home)
+
+A **reverse-chronological feed of fact changes**, not articles. Each card shows:
+
+```
+┌─────────────────────────────────────┐
+│ 🔴 BREAKING            Economy     │
+│                                     │
+│ Fed holds rates at 4.25-4.50%       │
+│                                     │
+│ ∆ Changed from: "Market expected    │
+│   25bp cut" → "Held steady"        │
+│                                     │
+│ Why: First hold after 3 consecutive │
+│ cuts signals inflation concerns     │
+│                                     │
+│ 📎 Federal Reserve · 2h ago        │
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
+│ Confidence: ██████████ Confirmed    │
+└─────────────────────────────────────┘
+```
+
+**Design notes:**
+- Minimal, dark-mode-first aesthetic (think Bloomberg Terminal meets Apple News)
+- Color-coded importance: red = breaking, amber = high, blue = medium, gray = low
+- Delta (∆) section uses diff-style formatting — strikethrough old, highlight new
+- Swipe actions: bookmark, share, mute topic
+- Pull to refresh with haptic feedback
+
+### Screen 2: Fact Detail / Timeline
+
+Tapping a fact opens its **full evolution timeline**:
+
+```
+Fed Funds Rate
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Current: 4.25-4.50% (held)
+Confidence: Confirmed
+Sources: 3 primary
+
+TIMELINE
+────────
+● Feb 2026 — Held at 4.25-4.50%
+│  "First hold after 3 cuts"
+│  📎 Federal Reserve
+│
+● Jan 2026 — Cut to 4.25-4.50%
+│  "Third consecutive 25bp cut"
+│  📎 Federal Reserve, Reuters
+│
+● Dec 2025 — Cut to 4.50-4.75%
+│  "Second consecutive cut"
+│  📎 Federal Reserve
+│
+● Nov 2025 — Cut to 4.75-5.00%
+│  "First cut since 2020"
+│  📎 Federal Reserve, AP
+
+RELATED FACTS
+─────────────
+→ US CPI Inflation Rate (3.2%)
+→ 10Y Treasury Yield (4.41%)
+→ Unemployment Rate (4.1%)
+```
+
+**Design notes:**
+- Vertical timeline with connecting lines
+- Each node expandable for full context
+- Source links open in-app Safari
+- "Related Facts" section shows connected data points
+
+### Screen 3: Topics / Categories
+
+Grid or list of tracked categories with activity indicators:
+
+```
+📊 Economy        ●●● 12 updates today
+🌍 Geopolitics    ●●  7 updates today
+💻 Technology     ●   3 updates today
+🔬 Science        ●   2 updates today
+⚖️  Legal          ●   4 updates today
+🌡️ Climate             1 update today
+```
+
+Users can subscribe/unsubscribe to categories and set notification preferences per category.
+
+### Screen 4: Search & Explore
+
+- Full-text search across all facts and their histories
+- Filter by: category, confidence level, date range, source tier
+- "Disputed Facts" section highlights conflicting reports
+- Trending: facts with the most revisions in the last 24h
+
+### Screen 5: Settings
+
+- Notification preferences (breaking only, high+, all)
+- Source preferences (which tiers to show)
+- Display density (compact vs. expanded cards)
+- API key configuration (for self-hosted backend)
+
+---
+
+## Key Technical Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| UI Framework | SwiftUI | Native iOS feel, modern declarative syntax |
+| Local Storage | SwiftData | Apple's modern persistence, syncs with CloudKit |
+| Networking | async/await + URLSession | Native Swift concurrency |
+| Backend | Supabase or self-hosted PostgreSQL | Real-time subscriptions, row-level security |
+| AI Layer | Claude API (claude-sonnet-4-5) | Best balance of quality and cost for extraction |
+| Push Notifications | APNs via backend | Breaking fact changes trigger pushes |
+| State Management | @Observable (Observation framework) | Modern SwiftUI pattern |
+
+---
+
+## Fact Verification Guardrails
+
+This is the hardest problem. The app must NOT become a misinformation amplifier.
+
+1. **Source Tiering**: Every fact requires at least one named source. Primary sources (official statements, government data) rank highest. Anonymous sourcing gets flagged.
+
+2. **Confidence Scoring**: Facts start as "developing" and only reach "confirmed" when corroborated by 2+ independent sources at wire tier or above.
+
+3. **Dispute Detection**: When sources conflict, the fact is flagged as "disputed" and both positions are shown side-by-side with attribution.
+
+4. **Correction Handling**: When a fact is corrected, the correction is prominently displayed and the timeline shows the full history including the error.
+
+5. **No AI Editorializing**: Claude extracts and structures — it does not add commentary, predictions, or analysis beyond the "why it matters" context line, which must be grounded in the source material.
+
+---
+
+## MVP Scope (v1.0)
+
+Build these first:
+- [ ] Fact feed with change-diffing UI
+- [ ] Fact detail with timeline view
+- [ ] Category filtering
+- [ ] 3 categories to start: Economy, Geopolitics, Technology
+- [ ] Claude API integration for fact extraction
+- [ ] Local persistence with SwiftData
+- [ ] Pull-to-refresh ingestion cycle
+- [ ] Basic search
+
+Defer to v2.0:
+- Push notifications
+- CloudKit sync across devices
+- Widgets (Lock Screen + Home Screen)
+- Share extensions
+- User-submitted fact corrections
+- Collaborative fact verification
+
+---
+
+## Sample Prompt to Start Coding
+
+```
+Build a SwiftUI iOS app called "Ledger" that displays a feed of evolving 
+news facts. Start with the data model (Fact, FactRevision, Source) using 
+SwiftData for persistence. Create the main feed view showing fact cards 
+with change-diff formatting, and a detail view with a vertical timeline 
+of how each fact has evolved. Use a dark-mode-first design with SF Symbols 
+and a minimal, information-dense aesthetic. Include a mock data provider 
+with 10 sample facts across Economy, Geopolitics, and Technology categories 
+so the UI can be developed before the Claude API backend is connected.
+```
+
+---
+
+## Why This Matters
+
+The news industry optimizes for engagement (clicks, time-on-site). This app optimizes for **informational efficiency** — giving people the minimum viable context to stay informed. It's the difference between reading 20 articles about the Fed and seeing one fact card that says "rate held, here's the delta, here's why."
+
+No opinions. No fluff. Just signal.
