@@ -8,12 +8,13 @@ import {
   Pressable,
   Platform,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Colors from '@/constants/colors';
 import { FactCard } from '@/components/FactCard';
-import { MOCK_FACTS, getFactsForCategory } from '@/lib/mockData';
+import { useFacts } from '@/lib/api';
 import { Category } from '@/lib/types';
 
 const FILTERS: { id: 'all' | Category; label: string }[] = [
@@ -39,14 +40,17 @@ export default function FeedScreen() {
   const [activeFilter, setActiveFilter] = useState<'all' | Category>('all');
   const [refreshing, setRefreshing] = useState(false);
 
-  const facts = getFactsForCategory(activeFilter);
+  const { data, isLoading, refetch } = useFacts({
+    category: activeFilter,
+  });
+
+  const facts = data?.facts ?? [];
+  const breakingCount = facts.filter(f => f.importance === 'breaking').length;
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1200);
-  }, []);
-
-  const breakingCount = MOCK_FACTS.filter(f => f.importance === 'breaking').length;
+    refetch().finally(() => setRefreshing(false));
+  }, [refetch]);
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 : 0 }]}>
@@ -97,31 +101,38 @@ export default function FeedScreen() {
         </ScrollView>
       </View>
 
-      <FlatList
-        data={facts}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => <FactCard fact={item} />}
-        contentContainerStyle={[
-          styles.list,
-          { paddingBottom: Platform.OS === 'web' ? 34 + 84 : 100 },
-        ]}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={Colors.tint}
-            colors={[Colors.tint]}
-          />
-        }
-        scrollEnabled={!!facts.length}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Feather name="inbox" size={36} color={Colors.textTertiary} />
-            <Text style={styles.emptyText}>No facts in this category</Text>
-          </View>
-        }
-      />
+      {isLoading && !refreshing ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={Colors.tint} size="small" />
+          <Text style={styles.loadingText}>Loading facts...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={facts}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => <FactCard fact={item} />}
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: Platform.OS === 'web' ? 34 + 84 : 100 },
+          ]}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.tint}
+              colors={[Colors.tint]}
+            />
+          }
+          scrollEnabled={!!facts.length}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Feather name="inbox" size={36} color={Colors.textTertiary} />
+              <Text style={styles.emptyText}>No facts in this category</Text>
+            </View>
+          }
+        />
+      )}
     </View>
   );
 }
@@ -204,6 +215,17 @@ const styles = StyleSheet.create({
   },
   separator: {
     height: 8,
+  },
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.textTertiary,
   },
   empty: {
     alignItems: 'center',

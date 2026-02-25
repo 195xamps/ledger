@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,11 +7,12 @@ import {
   TextInput,
   Pressable,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Colors from '@/constants/colors';
-import { searchFacts, MOCK_FACTS } from '@/lib/mockData';
+import { useSearchFacts, useFacts, useTrendingFacts } from '@/lib/api';
 import { FactCard } from '@/components/FactCard';
 import { Fact, ConfidenceLevel } from '@/lib/types';
 
@@ -32,19 +33,38 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [confidenceFilter, setConfidenceFilter] = useState<'all' | ConfidenceLevel>('all');
 
-  let results: Fact[] = query.trim().length > 1
-    ? searchFacts(query.trim())
-    : MOCK_FACTS;
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-  if (confidenceFilter !== 'all') {
+  // Fetch search results from API when there's a query
+  const { data: searchResults, isLoading: searchLoading } = useSearchFacts(debouncedQuery);
+
+  // Fetch all facts when no query (default view)
+  const { data: allFactsData, isLoading: allLoading } = useFacts({
+    confidence: confidenceFilter,
+    limit: 50,
+  });
+
+  // Fetch trending for the header section
+  const { data: trendingFacts } = useTrendingFacts(3);
+
+  // Determine which results to display
+  let results: Fact[] = debouncedQuery.length > 1
+    ? (searchResults ?? [])
+    : (allFactsData?.facts ?? []);
+
+  // Apply confidence filter to search results (all facts already filtered via API)
+  if (debouncedQuery.length > 1 && confidenceFilter !== 'all') {
     results = results.filter(f => f.confidence === confidenceFilter);
   }
 
-  const trendingFacts = [...MOCK_FACTS]
-    .sort((a, b) => b.timeline.length - a.timeline.length)
-    .slice(0, 3);
+  const isLoading = debouncedQuery.length > 1 ? searchLoading : allLoading;
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 : 0 }]}>
@@ -93,49 +113,55 @@ export default function SearchScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={results}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => <FactCard fact={item} />}
-        contentContainerStyle={[
-          styles.list,
-          { paddingBottom: Platform.OS === 'web' ? 34 + 84 : 100 },
-        ]}
-        ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-        scrollEnabled={!!results.length}
-        ListHeaderComponent={
-          !query ? (
-            <View style={styles.trendingSection}>
-              <View style={styles.trendingHeader}>
-                <Feather name="trending-up" size={13} color={Colors.textTertiary} />
-                <Text style={styles.trendingTitle}>MOST REVISED</Text>
+      {isLoading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator color={Colors.tint} size="small" />
+        </View>
+      ) : (
+        <FlatList
+          data={results}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => <FactCard fact={item} />}
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: Platform.OS === 'web' ? 34 + 84 : 100 },
+          ]}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+          scrollEnabled={!!results.length}
+          ListHeaderComponent={
+            !debouncedQuery && trendingFacts && trendingFacts.length > 0 ? (
+              <View style={styles.trendingSection}>
+                <View style={styles.trendingHeader}>
+                  <Feather name="trending-up" size={13} color={Colors.textTertiary} />
+                  <Text style={styles.trendingTitle}>MOST REVISED</Text>
+                </View>
+                {trendingFacts.map(fact => (
+                  <Pressable key={fact.id} style={styles.trendingRow}>
+                    <View>
+                      <Text style={styles.trendingFactHeadline} numberOfLines={1}>
+                        {fact.headline}
+                      </Text>
+                      <Text style={styles.trendingRevisions}>
+                        {fact.timeline.length} revisions
+                      </Text>
+                    </View>
+                    <Feather name="chevron-right" size={14} color={Colors.textTertiary} />
+                  </Pressable>
+                ))}
+                <View style={styles.divider} />
+                <Text style={styles.allResultsLabel}>ALL FACTS</Text>
               </View>
-              {trendingFacts.map(fact => (
-                <Pressable key={fact.id} style={styles.trendingRow}>
-                  <View>
-                    <Text style={styles.trendingFactHeadline} numberOfLines={1}>
-                      {fact.headline}
-                    </Text>
-                    <Text style={styles.trendingRevisions}>
-                      {fact.timeline.length} revisions
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={14} color={Colors.textTertiary} />
-                </Pressable>
-              ))}
-              <View style={styles.divider} />
-              <Text style={styles.allResultsLabel}>ALL FACTS</Text>
+            ) : null
+          }
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Feather name="search" size={36} color={Colors.textTertiary} />
+              <Text style={styles.emptyText}>No facts found for "{query}"</Text>
+              <Text style={styles.emptySubtext}>Try different keywords</Text>
             </View>
-          ) : null
-        }
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Feather name="search" size={36} color={Colors.textTertiary} />
-            <Text style={styles.emptyText}>No facts found for "{query}"</Text>
-            <Text style={styles.emptySubtext}>Try different keywords</Text>
-          </View>
-        }
-      />
+          }
+        />
+      )}
     </View>
   );
 }
@@ -193,6 +219,11 @@ const styles = StyleSheet.create({
   list: {
     padding: 12,
     gap: 8,
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   trendingSection: {
     marginBottom: 12,

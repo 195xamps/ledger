@@ -10,7 +10,7 @@ import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Feather } from '@expo/vector-icons';
 import { Fact } from '@/lib/types';
-import { formatTimeAgo } from '@/lib/mockData';
+import { formatTimeAgo } from '@/lib/api';
 import Colors from '@/constants/colors';
 import { ImportanceBadge } from './ImportanceBadge';
 import { CategoryPill, CATEGORY_COLORS } from './CategoryPill';
@@ -56,7 +56,7 @@ export function FactCard({ fact }: Props) {
           {fact.currentValue}
         </Text>
 
-        {latestRevision.previousValue && (
+        {latestRevision?.previousValue && (
           <View style={styles.diffContainer}>
             <View style={styles.deltaHeader}>
               <Feather name="git-merge" size={11} color={Colors.textTertiary} />
@@ -79,7 +79,7 @@ export function FactCard({ fact }: Props) {
           </View>
         )}
 
-        {latestRevision.whyItMatters && (
+        {latestRevision?.whyItMatters && (
           <Text style={styles.whyText} numberOfLines={2}>
             {latestRevision.whyItMatters}
           </Text>

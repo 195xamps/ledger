@@ -1,35 +1,68 @@
 /**
- * API hooks for Ledger.
+ * API hooks for Ledger — drop-in replacement for mockData imports.
  *
- * Drop-in replacement for mock data. Components switch from:
+ * Components switch from:
  *   import { MOCK_FACTS, getFactById } from '@/lib/mockData'
  * to:
  *   import { useFacts, useFact } from '@/lib/api'
  */
 
+import { fetch } from "expo/fetch";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getQueryFn } from "./query-client";
-import type { Fact, Category, ImportanceLevel, ConfidenceLevel } from "./types";
+import { getApiUrl, apiRequest } from "./query-client";
+import type { Fact, Category, ConfidenceLevel } from "./types";
 
-// Re-export the type expected by components (server returns ISO strings for dates)
-export interface ApiFact extends Omit<Fact, "lastUpdated" | "timeline"> {
-  lastUpdated: string;
-  isBookmarked?: boolean;
-  isMuted?: boolean;
-  timeline: Array<
-    Omit<Fact["timeline"][number], "timestamp"> & { timestamp: string }
-  >;
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+/** Fetch JSON from the API, returning null on 401 instead of throwing. */
+async function apiFetch<T>(path: string): Promise<T | null> {
+  const baseUrl = getApiUrl();
+  const res = await fetch(`${baseUrl}${path}`, { credentials: "include" });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
 }
 
-// Helper: parse ISO dates back to Date objects for components
-function parseFact(f: ApiFact): Fact {
+/**
+ * Transform a raw server fact into the client Fact shape.
+ * Server returns: id as number, dates as ISO strings, timeline.source without retrievedAt,
+ * relatedFacts as number[].
+ * Client expects: id as string, dates as Date, Source with retrievedAt, relatedFacts as string[].
+ */
+function parseFact(raw: any): Fact {
   return {
-    ...f,
-    lastUpdated: new Date(f.lastUpdated),
-    timeline: f.timeline.map((rev) => ({
-      ...rev,
+    id: String(raw.id),
+    headline: raw.headline,
+    currentValue: raw.currentValue,
+    category: raw.category,
+    importance: raw.importance,
+    confidence: raw.confidence,
+    tags: raw.tags ?? [],
+    lastUpdated: new Date(raw.lastUpdated),
+    timeline: (raw.timeline ?? []).map((rev: any) => ({
+      id: String(rev.id),
       timestamp: new Date(rev.timestamp),
+      previousValue: rev.previousValue,
+      newValue: rev.newValue,
+      delta: rev.delta,
+      whyItMatters: rev.whyItMatters,
+      revisionType: rev.revisionType,
+      source: {
+        name: rev.source?.name ?? "",
+        url: rev.source?.url ?? "",
+        tier: rev.source?.tier ?? "reporting",
+        retrievedAt: new Date(rev.timestamp), // proxy — server omits this on timeline
+      },
     })),
+    sources: (raw.sources ?? []).map((s: any) => ({
+      name: s.name,
+      url: s.url,
+      tier: s.tier,
+      retrievedAt: new Date(s.retrievedAt),
+    })),
+    relatedFacts: (raw.relatedFacts ?? []).map(String),
   };
 }
 
@@ -39,64 +72,69 @@ function parseFact(f: ApiFact): Fact {
 
 interface UseFactsOptions {
   category?: Category | "all";
-  importance?: ImportanceLevel;
-  confidence?: ConfidenceLevel;
+  confidence?: ConfidenceLevel | "all";
   limit?: number;
   offset?: number;
 }
 
 export function useFacts(options: UseFactsOptions = {}) {
-  const { category, importance, confidence, limit = 20, offset = 0 } = options;
+  const { category, confidence, limit = 50, offset = 0 } = options;
 
   const params = new URLSearchParams();
   if (category && category !== "all") params.set("category", category);
-  if (importance) params.set("importance", importance);
-  if (confidence) params.set("confidence", confidence);
+  if (confidence && confidence !== "all") params.set("confidence", confidence);
   if (limit) params.set("limit", String(limit));
   if (offset) params.set("offset", String(offset));
 
-  const queryString = params.toString();
-  const path = `/api/facts${queryString ? `?${queryString}` : ""}`;
+  const qs = params.toString();
+  const path = `/api/facts${qs ? `?${qs}` : ""}`;
 
-  return useQuery<{ facts: ApiFact[]; total: number }, Error, { facts: Fact[]; total: number }>({
-    queryKey: [path],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    select: (data) => {
+  return useQuery<{ facts: Fact[]; total: number }>({
+    queryKey: ["facts", category ?? "all", confidence ?? "all", limit, offset],
+    queryFn: async () => {
+      const data: any = await apiFetch(path);
       if (!data) return { facts: [], total: 0 };
       return {
-        facts: data.facts.map(parseFact),
-        total: data.total,
+        facts: (data.facts ?? []).map(parseFact),
+        total: data.total ?? 0,
       };
     },
-    staleTime: 30_000, // 30s
-    refetchInterval: 60_000, // poll every 60s
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }
 
 export function useFact(id: string | undefined) {
-  return useQuery<ApiFact, Error, Fact>({
-    queryKey: [`/api/facts/${id}`],
-    queryFn: getQueryFn({ on401: "returnNull" }),
+  return useQuery<Fact | null>({
+    queryKey: ["fact", id],
+    queryFn: async () => {
+      const data = await apiFetch(`/api/facts/${id}`);
+      if (!data) return null;
+      return parseFact(data);
+    },
     enabled: !!id,
-    select: (data) => (data ? parseFact(data) : undefined as any),
     staleTime: 15_000,
   });
 }
 
 export function useTrendingFacts(limit = 5) {
-  return useQuery<{ facts: ApiFact[] }, Error, Fact[]>({
-    queryKey: [`/api/facts/trending?limit=${limit}`],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    select: (data) => (data?.facts ?? []).map(parseFact),
+  return useQuery<Fact[]>({
+    queryKey: ["trending", limit],
+    queryFn: async () => {
+      const data: any = await apiFetch(`/api/facts/trending?limit=${limit}`);
+      return (data?.facts ?? []).map(parseFact);
+    },
     staleTime: 60_000,
   });
 }
 
 export function useDisputedFacts() {
-  return useQuery<{ facts: ApiFact[] }, Error, Fact[]>({
-    queryKey: ["/api/facts/disputed"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    select: (data) => (data?.facts ?? []).map(parseFact),
+  return useQuery<Fact[]>({
+    queryKey: ["disputed"],
+    queryFn: async () => {
+      const data: any = await apiFetch("/api/facts/disputed");
+      return (data?.facts ?? []).map(parseFact);
+    },
     staleTime: 60_000,
   });
 }
@@ -106,11 +144,15 @@ export function useDisputedFacts() {
 // ============================================================================
 
 export function useSearchFacts(query: string) {
-  return useQuery<{ facts: ApiFact[]; query: string }, Error, Fact[]>({
-    queryKey: [`/api/search?q=${encodeURIComponent(query)}`],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    enabled: query.length > 0,
-    select: (data) => (data?.facts ?? []).map(parseFact),
+  return useQuery<Fact[]>({
+    queryKey: ["search", query],
+    queryFn: async () => {
+      const data: any = await apiFetch(
+        `/api/search?q=${encodeURIComponent(query)}`
+      );
+      return (data?.facts ?? []).map(parseFact);
+    },
+    enabled: query.length > 1,
     staleTime: 30_000,
   });
 }
@@ -126,64 +168,39 @@ export interface CategoryStat {
 }
 
 export function useCategoryStats() {
-  return useQuery<{ categories: CategoryStat[] }, Error, CategoryStat[]>({
-    queryKey: ["/api/categories"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    select: (data) => data?.categories ?? [],
+  return useQuery<CategoryStat[]>({
+    queryKey: ["categories"],
+    queryFn: async () => {
+      const data: any = await apiFetch("/api/categories");
+      return data?.categories ?? [];
+    },
     staleTime: 60_000,
   });
 }
 
 // ============================================================================
-// BOOKMARKS
+// BOOKMARKS & MUTE
 // ============================================================================
 
-export function useBookmarks() {
-  return useQuery<{ facts: ApiFact[] }, Error, Fact[]>({
-    queryKey: ["/api/bookmarks"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
-    select: (data) => (data?.facts ?? []).map(parseFact),
-  });
-}
-
 export function useToggleBookmark() {
-  const queryClient = useQueryClient();
-
+  const qc = useQueryClient();
   return useMutation<{ bookmarked: boolean }, Error, string>({
-    mutationFn: async (factId: string) => {
+    mutationFn: async (factId) => {
       const res = await apiRequest("POST", `/api/bookmarks/${factId}`);
       return res.json();
     },
-    onSuccess: () => {
-      // Invalidate relevant queries to refresh bookmark state
-      queryClient.invalidateQueries({ queryKey: ["/api/bookmarks"] });
-      // Also invalidate any fact queries that might show bookmark status
-      queryClient.invalidateQueries({
-        predicate: (query) =>
-          (query.queryKey[0] as string)?.startsWith("/api/facts"),
-      });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["facts"] }),
   });
 }
 
-// ============================================================================
-// MUTE
-// ============================================================================
-
 export function useToggleMute() {
-  const queryClient = useQueryClient();
-
+  const qc = useQueryClient();
   return useMutation<{ muted: boolean }, Error, string>({
-    mutationFn: async (factId: string) => {
+    mutationFn: async (factId) => {
       const res = await apiRequest("POST", `/api/mute/${factId}`);
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        predicate: (query) =>
-          (query.queryKey[0] as string)?.startsWith("/api/facts"),
-      });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["facts"] }),
   });
 }
 
@@ -204,30 +221,26 @@ export interface AuthUser {
 
 export function useAuth() {
   return useQuery<AuthUser | null>({
-    queryKey: ["/api/auth/me"],
-    queryFn: getQueryFn({ on401: "returnNull" }),
+    queryKey: ["auth"],
+    queryFn: () => apiFetch("/api/auth/me"),
     staleTime: Infinity,
     retry: false,
   });
 }
 
 export function useLogin() {
-  const queryClient = useQueryClient();
-
+  const qc = useQueryClient();
   return useMutation<AuthUser, Error, { username: string; password: string }>({
-    mutationFn: async (credentials) => {
-      const res = await apiRequest("POST", "/api/auth/login", credentials);
+    mutationFn: async (creds) => {
+      const res = await apiRequest("POST", "/api/auth/login", creds);
       return res.json();
     },
-    onSuccess: (user) => {
-      queryClient.setQueryData(["/api/auth/me"], user);
-    },
+    onSuccess: (user) => qc.setQueryData(["auth"], user),
   });
 }
 
 export function useRegister() {
-  const queryClient = useQueryClient();
-
+  const qc = useQueryClient();
   return useMutation<
     AuthUser,
     Error,
@@ -237,40 +250,45 @@ export function useRegister() {
       const res = await apiRequest("POST", "/api/auth/register", data);
       return res.json();
     },
-    onSuccess: (user) => {
-      queryClient.setQueryData(["/api/auth/me"], user);
-    },
+    onSuccess: (user) => qc.setQueryData(["auth"], user),
   });
 }
 
 export function useLogout() {
-  const queryClient = useQueryClient();
-
+  const qc = useQueryClient();
   return useMutation<void, Error>({
     mutationFn: async () => {
       await apiRequest("POST", "/api/auth/logout");
     },
     onSuccess: () => {
-      queryClient.setQueryData(["/api/auth/me"], null);
-      queryClient.invalidateQueries();
+      qc.setQueryData(["auth"], null);
+      qc.invalidateQueries();
     },
   });
 }
 
 export function useUpdatePreferences() {
-  const queryClient = useQueryClient();
-
-  return useMutation<
-    { preferences: AuthUser["preferences"] },
-    Error,
-    Partial<AuthUser["preferences"]>
-  >({
+  const qc = useQueryClient();
+  return useMutation<any, Error, Partial<AuthUser["preferences"]>>({
     mutationFn: async (prefs) => {
       const res = await apiRequest("PATCH", "/api/auth/preferences", prefs);
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["auth"] }),
   });
+}
+
+// ============================================================================
+// UTILITY — kept here so components don't need to import from mockData
+// ============================================================================
+
+export function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }

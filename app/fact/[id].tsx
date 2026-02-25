@@ -7,13 +7,14 @@ import {
   Pressable,
   Platform,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
-import { getFactById, formatTimeAgo, MOCK_FACTS } from '@/lib/mockData';
+import { useFact, useFacts, formatTimeAgo } from '@/lib/api';
 import { ImportanceBadge } from '@/components/ImportanceBadge';
 import { CategoryPill, CATEGORY_COLORS } from '@/components/CategoryPill';
 import { ConfidenceBar } from '@/components/ConfidenceBar';
@@ -131,7 +132,21 @@ function TimelineNode({ revision, isFirst, isLast }: TimelineNodeProps) {
 export default function FactDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
-  const fact = getFactById(id);
+
+  // Fetch this fact from the API
+  const { data: fact, isLoading } = useFact(id);
+
+  // Get all facts from cache to resolve related fact details
+  const { data: allFactsData } = useFacts();
+  const allFacts = allFactsData?.facts ?? [];
+
+  if (isLoading) {
+    return (
+      <View style={[styles.container, styles.notFound]}>
+        <ActivityIndicator color={Colors.tint} size="large" />
+      </View>
+    );
+  }
 
   if (!fact) {
     return (
@@ -145,9 +160,10 @@ export default function FactDetailScreen() {
     );
   }
 
+  // Resolve related fact IDs to full fact objects
   const relatedFacts = fact.relatedFacts
-    .map(rid => MOCK_FACTS.find(f => f.id === rid))
-    .filter(Boolean) as typeof MOCK_FACTS;
+    .map(rid => allFacts.find(f => f.id === rid))
+    .filter(Boolean) as typeof allFacts;
 
   const categoryColor = CATEGORY_COLORS[fact.category];
 

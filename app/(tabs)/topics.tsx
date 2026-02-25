@@ -6,12 +6,14 @@ import {
   ScrollView,
   Pressable,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import Colors from '@/constants/colors';
-import { CATEGORIES, getUpdateCountToday, getFactsForCategory } from '@/lib/mockData';
+import { useCategoryStats } from '@/lib/api';
+import { CATEGORIES } from '@/lib/mockData';
 import { CATEGORY_COLORS, CATEGORY_LABELS } from '@/components/CategoryPill';
 import { Category } from '@/lib/types';
 
@@ -28,15 +30,23 @@ const CATEGORY_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
 
 export default function TopicsScreen() {
   const insets = useSafeAreaInsets();
+  const { data: categoryStats, isLoading } = useCategoryStats();
 
-  const totalUpdates = getUpdateCountToday('all');
+  // Build a lookup from API data
+  const statsMap = new Map(
+    (categoryStats ?? []).map(s => [s.category, s])
+  );
+
+  const totalUpdates = (categoryStats ?? []).reduce(
+    (acc, s) => acc + s.updatesToday, 0
+  );
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 : 0 }]}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 0 : insets.top + 8 }]}>
         <Text style={styles.title}>TOPICS</Text>
         <Text style={styles.subtitle}>
-          {totalUpdates} updates today across all categories
+          {isLoading ? 'Loading...' : `${totalUpdates} updates today across all categories`}
         </Text>
       </View>
 
@@ -47,46 +57,53 @@ export default function TopicsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.grid}>
-          {CATEGORIES.map(cat => {
-            const color = CATEGORY_COLORS[cat.id as Category];
-            const updateCount = getUpdateCountToday(cat.id);
-            const factCount = getFactsForCategory(cat.id).length;
-            const iconName = CATEGORY_ICONS[cat.id];
+        {isLoading ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color={Colors.tint} size="small" />
+          </View>
+        ) : (
+          <View style={styles.grid}>
+            {CATEGORIES.map(cat => {
+              const color = CATEGORY_COLORS[cat.id as Category];
+              const stats = statsMap.get(cat.id);
+              const updateCount = stats?.updatesToday ?? 0;
+              const factCount = stats?.count ?? 0;
+              const iconName = CATEGORY_ICONS[cat.id];
 
-            return (
-              <Pressable
-                key={cat.id}
-                style={({ pressed }) => [
-                  styles.card,
-                  { opacity: pressed ? 0.8 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
-                ]}
-              >
-                <View style={[styles.cardIconBg, { backgroundColor: color + '15' }]}>
-                  <Feather name={iconName} size={22} color={color} />
-                </View>
+              return (
+                <Pressable
+                  key={cat.id}
+                  style={({ pressed }) => [
+                    styles.card,
+                    { opacity: pressed ? 0.8 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
+                  ]}
+                >
+                  <View style={[styles.cardIconBg, { backgroundColor: color + '15' }]}>
+                    <Feather name={iconName} size={22} color={color} />
+                  </View>
 
-                <Text style={styles.cardLabel}>{CATEGORY_LABELS[cat.id as Category]}</Text>
+                  <Text style={styles.cardLabel}>{CATEGORY_LABELS[cat.id as Category]}</Text>
 
-                <View style={styles.cardStats}>
-                  <Text style={styles.factCount}>{factCount} facts</Text>
-                  {updateCount > 0 ? (
-                    <View style={[styles.updateBadge, { backgroundColor: color + '20' }]}>
-                      <View style={[styles.updateDot, { backgroundColor: color }]} />
-                      <Text style={[styles.updateText, { color }]}>
-                        {updateCount} today
-                      </Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.noUpdateText}>No updates</Text>
-                  )}
-                </View>
+                  <View style={styles.cardStats}>
+                    <Text style={styles.factCount}>{factCount} facts</Text>
+                    {updateCount > 0 ? (
+                      <View style={[styles.updateBadge, { backgroundColor: color + '20' }]}>
+                        <View style={[styles.updateDot, { backgroundColor: color }]} />
+                        <Text style={[styles.updateText, { color }]}>
+                          {updateCount} today
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.noUpdateText}>No updates</Text>
+                    )}
+                  </View>
 
-                <View style={[styles.cardBorder, { backgroundColor: color }]} />
-              </Pressable>
-            );
-          })}
-        </View>
+                  <View style={[styles.cardBorder, { backgroundColor: color }]} />
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>SIGNAL SOURCES</Text>
@@ -141,6 +158,10 @@ const styles = StyleSheet.create({
   content: {
     padding: 12,
     gap: 20,
+  },
+  loading: {
+    paddingTop: 40,
+    alignItems: 'center',
   },
   grid: {
     flexDirection: 'row',
