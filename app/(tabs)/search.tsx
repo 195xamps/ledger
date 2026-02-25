@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLocalSearchParams } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import Colors from '@/constants/colors';
 import { useSearchFacts, useFacts, useTrendingFacts } from '@/lib/api';
@@ -32,8 +33,9 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
-  const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const params = useLocalSearchParams<{ category?: string }>();
+  const [query, setQuery] = useState(params.category ?? '');
+  const [debouncedQuery, setDebouncedQuery] = useState(params.category ?? '');
   const [confidenceFilter, setConfidenceFilter] = useState<'all' | ConfidenceLevel>('all');
 
   // Debounce search input

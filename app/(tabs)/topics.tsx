@@ -73,6 +73,7 @@ export default function TopicsScreen() {
               return (
                 <Pressable
                   key={cat.id}
+                  onPress={() => router.push({ pathname: '/(tabs)/search', params: { category: cat.id } })}
                   style={({ pressed }) => [
                     styles.card,
                     { opacity: pressed ? 0.8 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
